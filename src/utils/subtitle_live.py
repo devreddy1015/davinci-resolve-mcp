@@ -406,7 +406,8 @@ def list_captions_live(resolve, timeline, params, safe_dir):
 def check_captions_live(resolve, timeline, params, safe_dir):
     """Caption QC (overlaps, gaps, word timing, line length) from a native export; mutates nothing."""
     return _read_track(resolve, timeline, params, safe_dir, "check_captions",
-                       maxCharacters=params.get("maxCharacters", params.get("max_characters", 24)))
+                       maxCharacters=params.get("maxCharacters", params.get("max_characters", 24)),
+                       minFramesPerWord=params.get("minFramesPerWord", 0))
 
 
 def write_captions_live(resolve, project, timeline, params, safe_dir):

@@ -1,9 +1,9 @@
-"""Five strict caption tools for small local models (Ollama, LM Studio, llama.cpp).
+"""Six strict caption tools for small local models (Ollama, LM Studio, llama.cpp).
 
 The same live Resolve operations as the compound server's timeline_ai, but every
 input is typed and closed: the look is a recipe name, and the server does the
 numbers and the word re-timing, so a small model only ever supplies text and
-names. About 2.6k characters of tool text against the compound server's ~145k.
+names. About 3k characters of tool text against the compound server's ~145k.
 Run it like the compound server:  python src/captions_server.py
 """
 from __future__ import annotations
@@ -78,6 +78,44 @@ def retime_words(text: str, start: float, end: float) -> list[dict]:
     return out
 
 
+MIN_FRAMES_PER_WORD = 3  # house style: a word on screen for under 3 frames cannot be read
+
+
+def _card(words: list, start: int, end: int) -> dict:
+    """One card on whole-frame bounds, keeping Resolve's measured word timings inside it."""
+    text = " ".join(w["text"] for w in words)
+    timed = [{"text": w["text"], "start": w["start"], "end": w["end"]} for w in words]
+    timed[0]["start"], timed[-1]["end"] = start, end
+    for word, following in zip(timed, timed[1:]):
+        word["end"] = following["start"]  # close any gap between words; the codec refuses gaps
+    if any(w["end"] <= w["start"] for w in timed):  # snapping to whole frames swallowed a sub-frame word
+        timed = retime_words(text, start, end)
+    return {"text": text, "start": start, "end": end, "words": timed}
+
+
+def _has_word_timings(caption: dict) -> bool:
+    """False when Resolve's export could not give every word a numeric start and end."""
+    return not caption.get("decodeIssues") and all(
+        isinstance(w.get(key), (int, float)) for w in caption["words"] for key in ("start", "end"))
+
+
+def split_caption(caption: dict, max_words: int) -> list[dict]:
+    """Cut a caption into cards of at most max_words, at Resolve's word timings, on whole frames.
+    A card under MIN_FRAMES_PER_WORD per word joins its neighbour, so it can run over max_words."""
+    words = caption["words"]
+    groups = [words[i:i + max_words] for i in range(0, len(words), max_words)]
+    bounds = [caption["start"], *(round(g[0]["start"]) for g in groups[1:]), caption["end"]]
+    while len(groups) > 1:
+        short = next((i for i, g in enumerate(groups)
+                      if bounds[i + 1] - bounds[i] < MIN_FRAMES_PER_WORD * len(g)), None)
+        if short is None:
+            break
+        keep = max(short - 1, 0)  # into the previous card; the first card into the next
+        groups[keep:keep + 2] = [groups[keep] + groups[keep + 1]]
+        del bounds[keep + 1]
+    return [_card(g, bounds[i], bounds[i + 1]) for i, g in enumerate(groups)]
+
+
 def _ai(action: str, params: dict) -> dict:
     # legacy = the plain dict; RESOLVE_MCP_RESULT_ENVELOPE=pure would nest it under "result".
     return timeline_ai(action, {**params, "envelope": "legacy"})
@@ -129,6 +167,31 @@ def captions_fix_text(edits: list[TextEdit], track: int = 1) -> dict:
 
 
 @mcp.tool()
+def captions_split(max_words: Annotated[int, Field(ge=1, le=10)] = 3, track: int = 1) -> dict:
+    """Split captions longer than max_words into cards (3 suits Reels/Shorts), cut at Resolve's word timings.
+    A card too short to read stays joined to its neighbour. Saves a new timeline revision; the original is kept."""
+    current = _ai("list_captions_live", {"track": track})
+    if not current.get("success"):
+        return current
+    replace, add, skipped = [], [], []
+    for caption in current["captions"]:
+        if len(caption["words"]) <= max_words:
+            continue
+        if not _has_word_timings(caption):
+            skipped.append(caption["id"])
+            continue
+        cards = split_caption(caption, max_words)
+        if len(cards) > 1:
+            replace.append({"id": caption["id"], **cards[0]})
+            add.extend(cards[1:])
+    note = {"skipped_without_word_timings": skipped} if skipped else {}
+    if not replace:
+        return {"success": True, "changed": 0, **note, "message":
+                f"Nothing to split into cards of {max_words} words: no caption is longer, or its cards would be too short to read"}
+    return {**_ai("write_captions_live", {"track": track, "replace": replace, "add": add}), **note}
+
+
+@mcp.tool()
 def captions_style(recipe: Recipe, track: int = 1) -> dict:
     """Apply a named look to a subtitle track: social_bold (9:16, outline on every word, box behind the spoken
     word), clean_minimal, youtube_standard (16:9 lower third). Saves a new timeline revision; the original is kept."""
@@ -137,8 +200,9 @@ def captions_style(recipe: Recipe, track: int = 1) -> dict:
 
 @mcp.tool()
 def captions_check(track: int = 1, max_characters: Annotated[int, Field(ge=1)] = 24) -> dict:
-    """Check a subtitle track for overlaps, gaps, bad word timing and lines over max_characters. Read-only."""
-    return _check({"track": track, "maxCharacters": max_characters})
+    """Check a subtitle track for overlaps, gaps, bad word timing, lines over max_characters and cards too
+    short to read (under 3 frames per word). Read-only."""
+    return _check({"track": track, "maxCharacters": max_characters, "minFramesPerWord": MIN_FRAMES_PER_WORD})
 
 
 # Tool bodies block on Resolve and on the Node codec; keep them off the event loop.

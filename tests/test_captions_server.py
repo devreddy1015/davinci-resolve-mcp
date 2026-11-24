@@ -35,7 +35,87 @@ class RetimeWordsTest(unittest.TestCase):
             cs.retime_words("   ", 0, 10)
 
 
+SOCIAL = {"id": "108086", "text": "Oh, that's such a cute", "start": 108086, "end": 108143, "words": [
+    {"text": "Oh,", "start": 108086, "end": 108106}, {"text": "that's", "start": 108106, "end": 108125},
+    {"text": "such", "start": 108125, "end": 108131}, {"text": "a", "start": 108131, "end": 108137},
+    {"text": "cute", "start": 108137, "end": 108143}]}
+
+
+def assert_valid_cards(test, caption, cards):
+    test.assertEqual((cards[0]["start"], cards[-1]["end"]), (caption["start"], caption["end"]))
+    for card, following in zip(cards, cards[1:]):
+        test.assertEqual(card["end"], following["start"], "cards tile the caption")
+    for card in cards:
+        test.assertIsInstance(card["start"], int)
+        test.assertEqual(card["text"], " ".join(w["text"] for w in card["words"]))
+        test.assertEqual((card["words"][0]["start"], card["words"][-1]["end"]), (card["start"], card["end"]))
+        for word, following in zip(card["words"], card["words"][1:]):
+            test.assertEqual(word["end"], following["start"], "words tile the card")
+        test.assertTrue(all(w["end"] > w["start"] for w in card["words"]))
+
+
+class SplitCaptionTest(unittest.TestCase):
+    def test_splits_at_resolve_word_timings(self):
+        cards = cs.split_caption(SOCIAL, 3)
+        self.assertEqual([(c["text"], c["start"], c["end"]) for c in cards],
+                         [("Oh, that's such", 108086, 108131), ("a cute", 108131, 108143)])
+        self.assertEqual(cards[0]["words"], SOCIAL["words"][:3], "measured word timings are kept")
+        assert_valid_cards(self, SOCIAL, cards)
+
+    def test_a_card_too_short_to_read_merges_into_its_neighbour(self):
+        caption = {"id": "0", "text": "a b c d", "start": 0, "end": 31, "words": [
+            {"text": "a", "start": 0, "end": 10}, {"text": "b", "start": 10, "end": 20},
+            {"text": "c", "start": 20, "end": 30}, {"text": "d", "start": 30, "end": 31}]}
+        cards = cs.split_caption(caption, 3)
+        self.assertEqual([c["text"] for c in cards], ["a b c d"])
+        first = {"id": "0", "text": "a b c d", "start": 0, "end": 30, "words": [
+            {"text": "a", "start": 0, "end": 1}, {"text": "b", "start": 1, "end": 10},
+            {"text": "c", "start": 10, "end": 20}, {"text": "d", "start": 20, "end": 30}]}
+        cards = cs.split_caption(first, 1)
+        self.assertEqual([c["text"] for c in cards], ["a b", "c", "d"], "the first card joins the next")
+        assert_valid_cards(self, first, cards)
+
+    def test_sub_frame_word_timings_still_give_valid_cards(self):
+        caption = {"id": "0", "text": "one two three four", "start": 0, "end": 20, "words": [
+            {"text": "one", "start": 0, "end": 4.6}, {"text": "two", "start": 4.6, "end": 4.8},
+            {"text": "three", "start": 4.8, "end": 12.2}, {"text": "four", "start": 12.2, "end": 20}]}
+        for max_words in (1, 2, 3):
+            assert_valid_cards(self, caption, cs.split_caption(caption, max_words))
+
+
 class ToolsTest(unittest.TestCase):
+    def test_split_replaces_long_captions_and_adds_the_extra_cards(self):
+        short = {"id": "108143", "text": "cat", "start": 108143, "end": 108160,
+                 "words": [{"text": "cat", "start": 108143, "end": 108160}]}
+        listed = {"success": True, "fps": 30, "captions": [SOCIAL, short]}
+        with patch.object(cs, "timeline_ai", side_effect=[listed, {"success": True}]) as ai:
+            cs.captions_split(track=2, max_words=3)
+        action, params = ai.call_args.args
+        self.assertEqual((action, params["track"]), ("write_captions_live", 2))
+        self.assertEqual([(c["id"], c["end"]) for c in params["replace"]], [("108086", 108131)])
+        self.assertEqual([(c["text"], c["start"]) for c in params["add"]], [("a cute", 108131)])
+
+    def test_captions_without_word_timings_are_skipped_not_fatal(self):
+        broken = {"id": "200", "text": "a b c d", "start": 200, "end": 240, "decodeIssues": ["word_count_mismatch"],
+                  "words": [{"text": t, "start": None, "end": None} for t in "abcd"]}
+        listed = {"success": True, "captions": [SOCIAL, broken]}
+        with patch.object(cs, "timeline_ai", side_effect=[listed, {"success": True}]) as ai:
+            result = cs.captions_split(max_words=3)
+        self.assertEqual([c["id"] for c in ai.call_args.args[1]["replace"]], ["108086"])
+        self.assertEqual(result["skipped_without_word_timings"], ["200"])
+
+    def test_gaps_between_words_are_closed_so_the_codec_accepts_the_cards(self):
+        gappy = {"id": "0", "text": "a b c d", "start": 0, "end": 40, "words": [
+            {"text": "a", "start": 0, "end": 8}, {"text": "b", "start": 10, "end": 20},
+            {"text": "c", "start": 20, "end": 28}, {"text": "d", "start": 31, "end": 40}]}
+        assert_valid_cards(self, gappy, cs.split_caption(gappy, 2))
+
+    def test_split_with_nothing_to_split_writes_nothing(self):
+        with patch.object(cs, "timeline_ai", return_value={"success": True, "captions": [SOCIAL]}) as ai:
+            result = cs.captions_split(max_words=5)
+        self.assertEqual((result["success"], result["changed"]), (True, 0))
+        self.assertEqual(ai.call_count, 1)
+
     def test_get_returns_only_id_and_text(self):
         with patch.object(cs, "timeline_ai", return_value=CAPTIONS) as ai:
             self.assertEqual(cs.captions_get(track=2),
@@ -97,12 +177,13 @@ class ToolsTest(unittest.TestCase):
     def test_check_runs_the_codec_check(self):
         with patch.object(cs, "_check", return_value={"success": True, "ok": True}) as check:
             cs.captions_check(track=1, max_characters=20)
-        self.assertEqual(check.call_args.args[0], {"track": 1, "maxCharacters": 20})
+        self.assertEqual(check.call_args.args[0], {"track": 1, "maxCharacters": 20, "minFramesPerWord": 3})
 
     def test_tool_surface_is_small_and_strict(self):
         tools = asyncio.run(cs.mcp.list_tools())
         self.assertEqual(sorted(t.name for t in tools),
-                         ["captions_check", "captions_fix_text", "captions_generate", "captions_get", "captions_style"])
+                         ["captions_check", "captions_fix_text", "captions_generate", "captions_get", "captions_split",
+                          "captions_style"])
         budget = sum(len(t.description or "") + len(json.dumps(t.inputSchema)) for t in tools)
         self.assertLess(budget, 4000, f"tool surface is {budget} chars; keep it small for local models")
         style = next(t for t in tools if t.name == "captions_style")
@@ -123,10 +204,11 @@ class CheckCaptionsLiveTest(unittest.TestCase):
         with patch.object(live.shutil, "which", return_value="node"), \
              patch.object(live, "subtitle_codec_gap", return_value=None), \
              patch.object(live.subprocess, "run", return_value=Mock(returncode=0, stdout=json.dumps(report))) as run:
-            result = live.check_captions_live(Mock(EXPORT_DRT=1), timeline, {"track": 1, "maxCharacters": 20},
-                                              lambda path: path)
+            result = live.check_captions_live(Mock(EXPORT_DRT=1), timeline,
+                                              {"track": 1, "maxCharacters": 20, "minFramesPerWord": 3}, lambda path: path)
         request = json.loads(run.call_args.kwargs["input"])
-        self.assertEqual((request["operation"], request["track"], request["maxCharacters"]), ("check_captions", 1, 20))
+        self.assertEqual((request["operation"], request["track"], request["maxCharacters"], request["minFramesPerWord"]),
+                         ("check_captions", 1, 20, 3))
         self.assertEqual(result["issues"], report["issues"])
         self.assertEqual(result["timeline"], "Cut")
 

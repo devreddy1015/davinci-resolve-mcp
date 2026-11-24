@@ -133,9 +133,10 @@ export async function inspectCaptionTimeline({ source, track = 1 }) {
   const { fps, items } = await readCaptions(source, track);
   return { track, fps, timeUnit: 'timeline_frames', captions: items.map((c) => c.decoded) };
 }
-export async function checkCaptionTimeline({ source, track = 1, maxCharacters = 24 }) {
+export async function checkCaptionTimeline({ source, track = 1, maxCharacters = 24, minFramesPerWord = 0 }) {
   const { fps, items } = await readCaptions(source, track);
-  return { track, fps, timeUnit: 'timeline_frames', ...checkCaptions(items.map((c) => c.decoded), { maxCharacters, fps }) };
+  return { track, fps, timeUnit: 'timeline_frames',
+    ...checkCaptions(items.map((c) => c.decoded), { maxCharacters, fps, minFramesPerWord }) };
 }
 export async function editCaptionTimeline({ source, output, track = 1, add = [], replace = [], delete: remove = [], templateCaptionId }) {
   const p = subtitleSchemas.write_captions.parse({ timeline: 'export', track, add, replace, delete: remove, templateCaptionId });

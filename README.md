@@ -134,7 +134,7 @@ The command starts a loopback-only server and opens the control panel in your br
 |------|-------------|-------|----------|
 | Compound | `src/server.py` | 37 | Default mode for most assistants. Related Resolve operations are grouped behind action parameters to keep context usage low. |
 | Full / granular | `src/server.py --full` or `src/resolve_mcp_server.py` | 390 | Power users who want one MCP tool per Resolve API method. |
-| Captions (local models) | `src/captions_server.py` | 5 | Small local models (Ollama). Typed inputs, named style recipes, ~2.6k characters of tool text. See [Captions with a local model](docs/guides/local-llm-captions.md). |
+| Captions (local models) | `src/captions_server.py` | 6 | Small local models (Ollama). Typed inputs, named style recipes, ~3k characters of tool text. See [Captions with a local model](docs/guides/local-llm-captions.md). |
 
 The compound server is recommended unless you specifically need the granular one-tool-per-method surface.
 
