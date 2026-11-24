@@ -29,7 +29,7 @@ From #392 by @devreddy1015. For #295.
 
 The new keys are Word Highlight only. Other templates refuse them, as before.
 
-- **A caption server for small local models:** `src/captions_server.py` exposes five typed tools (`captions_generate`, `captions_get`, `captions_fix_text`, `captions_style`, `captions_check`) over the same live operations as `timeline_ai`, with the look chosen from named recipes and word re-timing done by the server. About 1.5k tokens of tool text. See `docs/guides/local-llm-captions.md`.
+- **A caption server for small local models:** `src/captions_server.py` exposes five typed tools (`captions_generate`, `captions_get`, `captions_fix_text`, `captions_style`, `captions_check`) over the same live operations as `timeline_ai`, with the look chosen from named recipes and word re-timing done by the server. About 2.6k characters of tool text against the compound server's ~145k; unknown arguments are refused and error results carry `isError`, as in the compound server. See `docs/guides/local-llm-captions.md`.
 - **`check_captions` codec operation** (`checkCaptionTimeline` in `resolve-advanced/server/subtitle-timeline.mjs`, `check_captions_live` in `src/utils/subtitle_live.py`): the project_db caption QC, run on a native export with Resolve open.
 
 ### Still refused

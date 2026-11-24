@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from src import captions_server as cs
+from src.server import _err
 from src.utils import subtitle_live as live
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -36,9 +37,29 @@ class RetimeWordsTest(unittest.TestCase):
 
 class ToolsTest(unittest.TestCase):
     def test_get_returns_only_id_and_text(self):
-        with patch.object(cs, "timeline_ai", return_value=CAPTIONS):
+        with patch.object(cs, "timeline_ai", return_value=CAPTIONS) as ai:
             self.assertEqual(cs.captions_get(track=2),
                              {"success": True, "captions": [{"id": "100", "text": "hello wrold"}, {"id": "140", "text": "ok"}]})
+        # The plain dict regardless of RESOLVE_MCP_RESULT_ENVELOPE=pure in the environment.
+        self.assertEqual(ai.call_args.args[1]["envelope"], "legacy")
+
+    def test_generate_returns_the_new_track_index(self):
+        created = {"success": True, "verified": True, "subtitle_tracks_before": 1, "subtitle_tracks_after": 2}
+        with patch.object(cs, "timeline_ai", return_value=created):
+            self.assertEqual(cs.captions_generate()["track"], 2)
+        with patch.object(cs, "timeline_ai", return_value={"success": False, "verified": False}):
+            self.assertNotIn("track", cs.captions_generate(chars_per_line=20))
+
+    def test_unknown_arguments_and_error_results_are_flagged_to_the_client(self):
+        refused = asyncio.run(cs.mcp.call_tool("captions_check", {"track": 1, "maxCharacters": 40}))
+        self.assertTrue(refused.isError)
+        with patch.object(cs, "timeline_ai", return_value=_err("Resolve is not running")):
+            failed = asyncio.run(cs.mcp.call_tool("captions_get", {"track": 1}))
+        self.assertTrue(failed.isError)
+
+    def test_tool_bodies_run_off_the_event_loop(self):
+        for tool in asyncio.run(cs.mcp.list_tools()):
+            self.assertTrue(asyncio.iscoroutinefunction(cs.mcp._tool_manager.get_tool(tool.name).fn), tool.name)
 
     def test_fix_text_retimes_words_and_keeps_caption_bounds(self):
         with patch.object(cs, "timeline_ai", side_effect=[CAPTIONS, {"success": True}]) as ai:

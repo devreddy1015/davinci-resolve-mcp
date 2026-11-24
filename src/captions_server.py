@@ -3,7 +3,8 @@
 The same live Resolve operations as the compound server's timeline_ai, but every
 input is typed and closed: the look is a recipe name, and the server does the
 numbers and the word re-timing, so a small model only ever supplies text and
-names. Run it like the compound server:  python src/captions_server.py
+names. About 2.6k characters of tool text against the compound server's ~145k.
+Run it like the compound server:  python src/captions_server.py
 """
 from __future__ import annotations
 
@@ -17,8 +18,10 @@ _project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _project_dir not in sys.path:
     sys.path.insert(0, _project_dir)
 
-from mcp.server.fastmcp import FastMCP  # noqa: E402
-from src.server import _get_tl, _resolve_safe_dir, get_resolve, timeline_ai  # noqa: E402
+from src.server import (  # noqa: E402
+    _get_tl, _install_threaded_tool_dispatch, _resolve_safe_dir, get_resolve, timeline_ai,
+)
+from src.utils.mcp_error_flag import ErrorFlaggingFastMCP  # noqa: E402
 from src.utils.mcp_stdio import run_fastmcp_stdio  # noqa: E402
 from src.utils.subtitle_live import check_captions_live  # noqa: E402
 
@@ -49,7 +52,9 @@ RECIPES = {
 }
 Recipe = Literal["social_bold", "clean_minimal", "youtube_standard"]
 
-mcp = FastMCP("davinci-resolve-captions")
+# Same server class as the compound server: unknown arguments are refused and
+# error results carry isError, instead of a weak model reading them as success.
+mcp = ErrorFlaggingFastMCP("davinci-resolve-captions")
 
 
 class TextEdit(BaseModel):
@@ -73,6 +78,11 @@ def retime_words(text: str, start: float, end: float) -> list[dict]:
     return out
 
 
+def _ai(action: str, params: dict) -> dict:
+    # legacy = the plain dict; RESOLVE_MCP_RESULT_ENVELOPE=pure would nest it under "result".
+    return timeline_ai(action, {**params, "envelope": "legacy"})
+
+
 def _check(params: dict) -> dict:
     _project, timeline, err = _get_tl()
     return err or check_captions_live(get_resolve(), timeline, params, _resolve_safe_dir)
@@ -80,14 +90,19 @@ def _check(params: dict) -> dict:
 
 @mcp.tool()
 def captions_generate(chars_per_line: Annotated[int, Field(ge=1, le=60)] = 18) -> dict:
-    """Create captions from the timeline's audio (Resolve Studio). Adds a new subtitle track; then use captions_get."""
-    return timeline_ai("create_subtitles", {"settings": {"chars_per_line": chars_per_line}})
+    """Create captions from the timeline's audio (Resolve Studio) on a new subtitle track.
+    Returns that track's index as `track`; pass it to the other tools."""
+    result = _ai("create_subtitles", {"settings": {"chars_per_line": chars_per_line}})
+    if result.get("verified"):
+        # shortcut: assumes Resolve appends the new subtitle track last; upgrade if a build inserts elsewhere.
+        return {**result, "track": result["subtitle_tracks_after"]}
+    return result
 
 
 @mcp.tool()
 def captions_get(track: int = 1) -> dict:
     """List a subtitle track's captions as {id, text}, in order. Timing stays on the server."""
-    result = timeline_ai("list_captions_live", {"track": track})
+    result = _ai("list_captions_live", {"track": track})
     if not result.get("success"):
         return result
     return {"success": True, "captions": [{"id": c["id"], "text": c["text"]} for c in result["captions"]]}
@@ -97,7 +112,7 @@ def captions_get(track: int = 1) -> dict:
 def captions_fix_text(edits: list[TextEdit], track: int = 1) -> dict:
     """Replace caption text (spelling, names, punctuation, fillers); keep each caption's meaning and length.
     The server re-times the words and saves a new timeline revision; the original timeline is kept."""
-    current = timeline_ai("list_captions_live", {"track": track})
+    current = _ai("list_captions_live", {"track": track})
     if not current.get("success"):
         return current
     by_id = {c["id"]: c for c in current["captions"]}
@@ -110,14 +125,14 @@ def captions_fix_text(edits: list[TextEdit], track: int = 1) -> dict:
                    for e in edits]
     except ValueError as exc:
         return {"success": False, "error": str(exc)}
-    return timeline_ai("write_captions_live", {"track": track, "replace": replace})
+    return _ai("write_captions_live", {"track": track, "replace": replace})
 
 
 @mcp.tool()
 def captions_style(recipe: Recipe, track: int = 1) -> dict:
     """Apply a named look to a subtitle track: social_bold (9:16, outline on every word, box behind the spoken
     word), clean_minimal, youtube_standard (16:9 lower third). Saves a new timeline revision; the original is kept."""
-    return timeline_ai("set_subtitle_preset", {"track": track, "preset": "Word Highlight", "inputs": RECIPES[recipe]})
+    return _ai("set_subtitle_preset", {"track": track, "preset": "Word Highlight", "inputs": RECIPES[recipe]})
 
 
 @mcp.tool()
@@ -125,6 +140,9 @@ def captions_check(track: int = 1, max_characters: Annotated[int, Field(ge=1)] =
     """Check a subtitle track for overlaps, gaps, bad word timing and lines over max_characters. Read-only."""
     return _check({"track": track, "maxCharacters": max_characters})
 
+
+# Tool bodies block on Resolve and on the Node codec; keep them off the event loop.
+_install_threaded_tool_dispatch(mcp)
 
 if __name__ == "__main__":
     run_fastmcp_stdio(mcp)

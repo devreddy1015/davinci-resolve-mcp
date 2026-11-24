@@ -1,8 +1,9 @@
 # Captions with a local model (Ollama)
 
 `src/captions_server.py` is a second entry point for small local models. It
-exposes five tools with typed, closed inputs, about 1,500 tokens of tool text
-instead of the compound server's ~28,000. Underneath it calls the same live
+exposes five tools with typed, closed inputs: about 2.6k characters of tool
+text (names, descriptions and schemas, under a thousand tokens) instead of the
+compound server's ~145k. Underneath it calls the same live
 operations as `timeline_ai` (`create_subtitles`, `list_captions_live`,
 `write_captions_live`, `set_subtitle_preset`), so Resolve sees the same
 verified export → edit → import revisions. The model supplies text and names;
@@ -10,13 +11,14 @@ the server does the numbers.
 
 | Tool | What the model sends | What the server does |
 |---|---|---|
-| `captions_generate(chars_per_line=18)` | nothing | Resolve Studio auto-captions; adds a subtitle track |
+| `captions_generate(chars_per_line=18)` | nothing | Resolve Studio auto-captions on a new subtitle track; returns its index as `track` |
 | `captions_get(track=1)` | nothing | returns `[{id, text}]`; timing stays on the server |
 | `captions_fix_text(edits=[{id, text}], track=1)` | corrected text | re-times the words by letter count; new timeline revision |
 | `captions_style(recipe, track=1)` | one of `social_bold`, `clean_minimal`, `youtube_standard` | applies Word Highlight with the recipe's inputs |
 | `captions_check(track=1, max_characters=24)` | nothing | overlaps, gaps, word timing, long lines |
 
-The order is generate → get → fix_text → style → check. Each write creates a
+The order is generate → get → fix_text → style → check, passing the `track`
+that `captions_generate` returned to each later call. Each write creates a
 new, selected timeline revision and keeps the original, as the compound server
 does. Recipes live in `RECIPES` in `src/captions_server.py`; `social_bold` is
 the look from issue #295 (white text, black outline on every word, a yellow box
