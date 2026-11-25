@@ -2,6 +2,15 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## Unreleased — Captions with a local model (Ollama, Windows first)
+
+### Added
+
+- **A caption server for small local models:** `src/captions_server.py` exposes six typed tools (`captions_generate`, `captions_get`, `captions_fix_text`, `captions_split`, `captions_style`, `captions_check`) over the same live operations as `timeline_ai`, with the look chosen from named recipes and the server doing word re-timing and card splitting (at Resolve's word timings, never under 3 frames per word). About 3k characters of tool text against the compound server's ~145k; unknown arguments are refused and error results carry `isError`, as in the compound server. See `docs/guides/local-llm-captions.md`.
+- **`check_captions` codec operation** (`checkCaptionTimeline` in `resolve-advanced/server/subtitle-timeline.mjs`, `check_captions_live` in `src/utils/subtitle_live.py`): the project_db caption QC, run on a native export with Resolve open. `checkCaptions` takes an opt-in `minFramesPerWord` and then warns `too_short` for a card on screen under that many frames per word; existing callers are unchanged.
+- **`scripts/local_llm_captions.py`:** the local-model launcher, built for Windows first. Lists pulled Ollama models that can call tools; with `-m <model>` it checks Resolve's scripting library, Node and the codec packages, and the model's tool calling, writes `logs/ollmcp-servers.json` from `install.py`'s own server entry (Resolve paths, and `PYTHONHOME` on Windows) and starts ollmcp. Honours `OLLAMA_HOST`, including `0.0.0.0`.
+- **`scripts/compare_captions.py`:** scores a local model's captions against approved ones from two exported `.drt` files (word error rate, word timing within a frame tolerance, card counts, caption QC, exact style match) and exits 1 when a threshold is missed. Resolve does not need to be open.
+
 ## What's New in v5.5.1 — House-style conventions withdrawn
 
 From #391 by @nisee22.
